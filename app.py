@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
-from shapely.geometry import shape, mapping
+from shapely.geometry import shape, mapping, Point
 from shapely.ops import transform
 from shapely.affinity import scale, translate
 from pyproj import Transformer
@@ -28,26 +28,102 @@ st.markdown(
 )
 
 # ---------------------------------------------------------
-# 2. LOAD EMPIRICAL FIELD DATA & WETLAND BOUNDARY (SELF-HEALING)
+# 2. BULLETPROOF DATA LOADER (COMPUTES ALL METRICS ON THE FLY)
 # ---------------------------------------------------------
+def calc_heat_index_c(T_c, RH):
+    T_f = T_c * 9.0 / 5.0 + 32.0
+    HI_f = (
+        -42.379
+        + 2.04901523 * T_f
+        + 10.14333127 * RH
+        - 0.22475541 * T_f * RH
+        - 0.00683783 * (T_f ** 2)
+        - 0.05481717 * (RH ** 2)
+        + 0.00122874 * (T_f ** 2) * RH
+        + 0.00085282 * T_f * (RH ** 2)
+        - 0.00000199 * (T_f ** 2) * (RH ** 2)
+    )
+    steadman = 0.5 * (T_f + 61.0 + ((T_f - 68.0) * 1.2) + (RH * 0.094))
+    HI_f = np.where(steadman < 80.0, steadman, HI_f)
+    return (HI_f - 32.0) * 5.0 / 9.0
+
 @st.cache_data
 def load_data():
-    master = pd.read_csv("bangkok_master_cooling_dataset.csv")
+    # Find whichever master CSV exists in the repo
+    csv_candidates = [
+        "bangkok_master_cooling_dataset.csv",
+        "bangkok_master_dataset_spatial.csv",
+        "bangkok_sensors_with_weather.csv"
+    ]
+    master = None
+    for fname in csv_candidates:
+        if os.path.exists(fname):
+            master = pd.read_csv(fname)
+            break
+    if master is None:
+        raise FileNotFoundError("bangkok_master_cooling_dataset.csv")
+
     with open("bangkok_wetland_boundary.geojson", "r") as f:
         wetland_gj = json.load(f)
 
-    # Filter validated outdoor sensors
-    if "sensor_quality_flag" in master.columns:
-        valid_master = master[master["sensor_quality_flag"] == "Valid_Outdoor"].copy()
-    else:
-        valid_master = master[~master["sensor_id"].isin(["Sensor_16", "Sensor_18"])].copy()
+    # Ensure timestamp & hour exist
+    master["timestamp"] = pd.to_datetime(master["timestamp"])
+    if "hour" not in master.columns:
+        master["hour"] = master["timestamp"].dt.hour
+    if "is_peak_afternoon" not in master.columns:
+        master["is_peak_afternoon"] = master["hour"].between(11, 16)
 
-    # Build summary directly from master dataset so column names always match 100%
-    if "hour" not in valid_master.columns:
-        valid_master["hour"] = pd.to_datetime(valid_master["timestamp"]).dt.hour
-    if "is_peak_afternoon" not in valid_master.columns:
-        valid_master["is_peak_afternoon"] = valid_master["hour"].between(11, 16)
+    # Ensure spatial metrics exist (compute from GeoJSON if missing)
+    poly_features = [feat for feat in wetland_gj["features"] if feat["geometry"]["type"] in ["Polygon", "MultiPolygon"]]
+    poly_wgs = shape(poly_features[0]["geometry"])
+    to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32647", always_xy=True)
+    poly_utm = transform(to_utm.transform, poly_wgs)
+    centroid_utm = poly_utm.centroid
 
+    if "distance_to_wetland_m" not in master.columns or "zone_type" not in master.columns or "wind_exposure" not in master.columns:
+        unique_pts = master[["sensor_id", "easting_m", "northing_m"]].drop_duplicates()
+        spatial_rows = []
+        downwind_dir = (231.08 + 180) % 360
+        for _, r in unique_pts.iterrows():
+            pt = Point(r["easting_m"], r["northing_m"])
+            inside = poly_utm.contains(pt) or poly_utm.touches(pt)
+            dist_m = 0.0 if inside else round(poly_utm.distance(pt), 1)
+            dx = r["easting_m"] - centroid_utm.x
+            dy = r["northing_m"] - centroid_utm.y
+            bearing = (math.degrees(math.atan2(dx, dy)) + 360) % 360
+            ang_diff = abs((bearing - downwind_dir + 180) % 360 - 180)
+            if inside:
+                w_exp = "Core_Wetland"
+                z_type = "Core_Wetland"
+            else:
+                w_exp = "Downwind_NE" if ang_diff <= 45 else ("Upwind_SW" if ang_diff >= 135 else "Crosswind")
+                z_type = "Near_Buffer_0_150m" if dist_m <= 150 else ("Mid_Buffer_150_400m" if dist_m <= 400 else "Urban_Reference_400m+")
+            spatial_rows.append({
+                "sensor_id": r["sensor_id"],
+                "distance_to_wetland_m": dist_m,
+                "zone_type": z_type,
+                "wind_exposure": w_exp
+            })
+        spatial_df = pd.DataFrame(spatial_rows)
+        for col in ["distance_to_wetland_m", "zone_type", "wind_exposure"]:
+            if col in master.columns:
+                master = master.drop(columns=[col])
+        master = master.merge(spatial_df, on="sensor_id", how="left")
+
+    # Ensure Heat Index exists
+    if "heat_index_c" not in master.columns:
+        master["heat_index_c"] = calc_heat_index_c(master["air_temp"], master["rel_humidity"]).round(2)
+
+    # Filter out the 2 indoor AC sensors (Sensor_16 & Sensor_18)
+    valid_master = master[~master["sensor_id"].isin(["Sensor_16", "Sensor_18"])].copy()
+
+    # Ensure cooling_delta_t_c exists (compute vs Urban_Reference_400m+ if missing)
+    if "cooling_delta_t_c" not in valid_master.columns:
+        urban_ref = valid_master[valid_master["zone_type"] == "Urban_Reference_400m+"].groupby("timestamp")["air_temp"].mean().rename("urban_ref_temp_c")
+        valid_master = valid_master.merge(urban_ref, on="timestamp", how="left")
+        valid_master["cooling_delta_t_c"] = (valid_master["urban_ref_temp_c"] - valid_master["air_temp"]).round(2)
+
+    # Build clean 22-sensor summary table
     summary_all = valid_master.groupby(
         ["sensor_id", "zone_type", "distance_to_wetland_m", "wind_exposure", "latitude", "longitude", "easting_m", "northing_m"],
         as_index=False
@@ -66,7 +142,7 @@ def load_data():
     )
 
     summary = summary_all.merge(summary_peak, on="sensor_id", how="left")
-    return master, summary, wetland_gj
+    return valid_master, summary, wetland_gj
 
 try:
     master_df, summary_df, wetland_geojson = load_data()
@@ -202,7 +278,6 @@ with map_col:
     to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32647", always_xy=True)
     to_wgs = Transformer.from_crs("EPSG:32647", "EPSG:4326", always_xy=True)
     
-    # Extract Polygon feature safely even if GeoJSON also contains Point features
     poly_features = [feat for feat in wetland_geojson["features"] if feat["geometry"]["type"] in ["Polygon", "MultiPolygon"]]
     poly_wgs = shape(poly_features[0]["geometry"])
     poly_utm = transform(to_utm.transform, poly_wgs)
