@@ -303,7 +303,14 @@ with map_col:
     inner_buf_wgs = mapping(transform(to_wgs.transform, inner_buffer_utm))
     plume_wgs = mapping(transform(to_wgs.transform, plume_utm))
 
-    m = folium.Map(location=[13.7295, 100.5585], zoom_start=15, tiles="CartoDB positron")
+    m = folium.Map(location=[13.7295, 100.5585], zoom_start=15, tiles="OpenStreetMap", name="Bangkok Street Map")
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery",
+        name="Satellite Aerial View",
+        overlay=False,
+        control=True
+    ).add_to(m)
 
     if mcd_meters > 0:
         folium.GeoJson(
