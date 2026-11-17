@@ -301,13 +301,9 @@ with chart_col:
 
     # Urban Planning Recommendation Box
     st.info(
-        f"**Planning Application Insight (at {target_distance_m}m Setback):**
-
-"
-        f"- **Crosswind / General Street:** Expected peak afternoon temperature reduction is **{dt_crosswind_target:.2f} °C**.
-"
-        f"- **Downwind Ventilation Corridor ({wind_direction_deg}°):** Expected peak reduction reaches **{dt_downwind_target:.2f} °C**.
-"
+        f"**Planning Application Insight (at {target_distance_m}m Setback):**\n\n"
+        f"- **Crosswind / General Street:** Expected peak afternoon temperature reduction is **{dt_crosswind_target:.2f} °C**.\n"
+        f"- **Downwind Ventilation Corridor ({wind_direction_deg}°):** Expected peak reduction reaches **{dt_downwind_target:.2f} °C**.\n"
         f"- **Zoning Recommendation:** Maintain open street canyons and low-rise setbacks within **{mcd_meters:.0f} m – {mcd_downwind_meters:.0f} m** of the wetland edge to preserve the ≥{cooling_threshold_c}°C cooling benefit."
     )
 
