@@ -65,6 +65,11 @@ def load_data():
     with open("bangkok_wetland_boundary.geojson", "r") as f:
         wetland_gj = json.load(f)
 
+    bma_districts_gj = None
+    if os.path.exists("bangkok_bma_districts.geojson"):
+        with open("bangkok_bma_districts.geojson", "r") as f:
+            bma_districts_gj = json.load(f)
+
     master["timestamp"] = pd.to_datetime(master["timestamp"])
     if "hour" not in master.columns:
         master["hour"] = master["timestamp"].dt.hour
@@ -135,10 +140,10 @@ def load_data():
     )
 
     summary = summary_all.merge(summary_peak, on="sensor_id", how="left")
-    return valid_master, summary, wetland_gj
+    return valid_master, summary, wetland_gj, bma_districts_gj
 
 try:
-    master_df, summary_df, wetland_geojson = load_data()
+    master_df, summary_df, wetland_geojson, bma_districts_geojson = load_data()
 except FileNotFoundError as e:
     st.error(
         f"Missing required data file: {e}. Please ensure `bangkok_master_cooling_dataset.csv` "
@@ -149,7 +154,6 @@ except FileNotFoundError as e:
 # ---------------------------------------------------------
 # 3. BANGKOK BOUNDARY, VEGETATION ZONES & COOLING CORRIDORS
 # ---------------------------------------------------------
-# Bangkok Metropolitan Administration (BMA) Outer Boundary Polygon (WGS84 lon, lat)
 BANGKOK_BMA_BOUNDARY_COORDS = [
     [100.328, 13.785], [100.345, 13.865], [100.435, 13.925], [100.545, 13.955],
     [100.640, 13.945], [100.745, 13.925], [100.885, 13.895], [100.938, 13.835],
@@ -159,11 +163,10 @@ BANGKOK_BMA_BOUNDARY_COORDS = [
     [100.475, 13.575], [100.415, 13.625], [100.355, 13.665], [100.328, 13.785]
 ]
 
-# Existing & Proposed Urban Wetlands / Retention Parks in Bangkok
 BANGKOK_WETLAND_SITES = [
     {
         "name": "Benjakitti Forest Park & Wetland (Calibration Site)",
-        "district": "Khlong Toei",
+        "district": "Khlong Toei / Asok CBD",
         "status": "Existing",
         "area_ha": 88.84,
         "use_geojson": True,
@@ -171,7 +174,7 @@ BANGKOK_WETLAND_SITES = [
     },
     {
         "name": "Lumphini Park & Retention Lake",
-        "district": "Pathum Wan",
+        "district": "Pathum Wan / Silom CBD",
         "status": "Existing",
         "area_ha": 57.6,
         "use_geojson": False,
@@ -182,7 +185,7 @@ BANGKOK_WETLAND_SITES = [
     },
     {
         "name": "Makkasan Wetland & Retention Basin",
-        "district": "Ratchathewi",
+        "district": "Ratchathewi / Rama IX CBD",
         "status": "Existing / Upgradeable",
         "area_ha": 42.0,
         "use_geojson": False,
@@ -259,7 +262,6 @@ BANGKOK_WETLAND_SITES = [
     },
 ]
 
-# Urban Vegetation & Canopy Zones (Existing Urban Forests, Agricultural Green Belts, Tree Canopies)
 VEGETATION_ZONES = [
     {
         "name": "Bang Kachao Tropical Urban Forest & Orchard Canopy",
@@ -308,7 +310,6 @@ VEGETATION_ZONES = [
     },
 ]
 
-# Cooling & Ventilation Corridors (Aligned with Prevailing 231° SW Monsoon & Canal Network)
 COOLING_CORRIDORS = [
     {
         "name": "Corridor 1: Benjakitti – Lumphini Green Bridge Skywalk & Tree Spine",
@@ -359,71 +360,98 @@ COOLING_CORRIDORS = [
 ]
 
 # ---------------------------------------------------------
-# 4. SIDEBAR: SIMULATION SCOPE, VISION PRESET & SLIDERS
+# 4. SIDEBAR: SIMULATION SCOPE, CBD MITIGATION PACKAGES & SLIDERS
 # ---------------------------------------------------------
-st.sidebar.header("🧭 1. Planning Vision & Scope")
+st.sidebar.header("🧭 1. Simulation Scale & Vision")
 
 sim_mode = st.sidebar.radio(
-    "Map & Analysis Scale:",
+    "Select Planning Scale:",
     options=[
+        "Bangkok CBD Mitigation Lab (Benjakitti–Asok–Lumphini)",
         "Bangkok-Wide Vision (Boundary + Vegetation + Corridors)",
         "Benjakitti Empirical Site (22 Field Sensors Validation)"
     ],
     index=0
 )
 
-vision_scenario = st.sidebar.selectbox(
-    "Select Planning Scenario:",
+mitigation_preset = st.sidebar.selectbox(
+    "Select Future Mitigation Package:",
     options=[
-        "Existing Situation (2026 Baseline)",
-        "Future Vision 2035: Blue-Green Network + Cooling Corridors",
-        "Future Stress Test: Extreme Heatwave + Future Corridors"
+        "Baseline Existing CBD (2026 Current Condition)",
+        "Moderate CBD Mitigation (30% Canopy + Wind Setbacks + Cool Roofs)",
+        "Full Integrated CBD Vision (45% Canopy + Ventilation Corridors + Wetland Edge Opt.)",
+        "Extreme Heatwave + Full CBD Mitigation (950 W/m² Stress Test)"
     ],
-    index=1
+    index=2
 )
 
-# Apply preset values based on selected scenario while keeping sliders interactive
-if vision_scenario == "Existing Situation (2026 Baseline)":
-    preset_scale = 100
-    preset_solar = 650
-    preset_wind = 1.9
-    include_future_nodes = False
-    corridor_boost_on = False
-elif vision_scenario == "Future Vision 2035: Blue-Green Network + Cooling Corridors":
-    preset_scale = 130
-    preset_solar = 650
-    preset_wind = 2.1
-    include_future_nodes = True
-    corridor_boost_on = True
+if mitigation_preset == "Baseline Existing CBD (2026 Current Condition)":
+    p_scale, p_canopy, p_openness, p_cool_surf, p_edge_opt, p_solar, p_wind = 100, 15, 40, 10, False, 650, 1.9
+    include_future_nodes, corridor_boost_on = False, False
+elif mitigation_preset == "Moderate CBD Mitigation (30% Canopy + Wind Setbacks + Cool Roofs)":
+    p_scale, p_canopy, p_openness, p_cool_surf, p_edge_opt, p_solar, p_wind = 110, 30, 60, 40, True, 650, 2.0
+    include_future_nodes, corridor_boost_on = True, True
+elif mitigation_preset == "Full Integrated CBD Vision (45% Canopy + Ventilation Corridors + Wetland Edge Opt.)":
+    p_scale, p_canopy, p_openness, p_cool_surf, p_edge_opt, p_solar, p_wind = 120, 45, 80, 70, True, 650, 2.1
+    include_future_nodes, corridor_boost_on = True, True
 else:
-    preset_scale = 130
-    preset_solar = 950
-    preset_wind = 1.2
-    include_future_nodes = True
-    corridor_boost_on = True
+    p_scale, p_canopy, p_openness, p_cool_surf, p_edge_opt, p_solar, p_wind = 120, 45, 80, 70, True, 950, 1.2
+    include_future_nodes, corridor_boost_on = True, True
 
 st.sidebar.divider()
-st.sidebar.header("🗺️ 2. Map Layer Toggles")
-show_bma_boundary = st.sidebar.checkbox("Show Bangkok Administrative Boundary", value=True)
-show_vegetation = st.sidebar.checkbox("Show Vegetation & Urban Canopy Zones", value=True)
-show_corridors = st.sidebar.checkbox("Show Blue-Green Cooling Corridors", value=True)
-
-st.sidebar.divider()
-st.sidebar.header("🎛️ 3. Fine-Tune Simulation Sliders")
+st.sidebar.header("🏗️ 2. CBD Urban Design Mitigation Levers")
+st.sidebar.caption("Adjust built-environment & blue-green design parameters to test cooling gains.")
 
 wetland_scale_pct = st.sidebar.slider(
-    "Wetland Area Expansion / Reduction (%)",
+    "1. Wetland Area Expansion / Link (%)",
     min_value=50,
     max_value=150,
-    value=preset_scale,
-    step=10
+    value=p_scale,
+    step=10,
+    help="Expanding connected wetland & retention water-forest area."
 )
 
+wetland_edge_opt = st.sidebar.checkbox(
+    "2. Multi-Tier Riparian Canopy & Shallow Water Edge (+0.35°C)",
+    value=p_edge_opt,
+    help="Optimizes wetland edge evapotranspiration & shading."
+)
+
+cbd_canopy_pct = st.sidebar.slider(
+    "3. CBD Street Tree Canopy & Green Roof Cover (%)",
+    min_value=10,
+    max_value=50,
+    value=p_canopy,
+    step=5,
+    help="Bangkok CBD current baseline ~15%. Target 30–45% via street trees & sky gardens."
+)
+
+canyon_openness_pct = st.sidebar.slider(
+    "4. Street Canyon Wind Porosity / Step-Down Massing (%)",
+    min_value=30,
+    max_value=90,
+    value=p_openness,
+    step=5,
+    help="Aligned with 231° SW monsoon. Higher porosity reduces drag and extends cool air penetration."
+)
+
+cool_surface_pct = st.sidebar.slider(
+    "5. High-Albedo Cool Roofs & Permeable Pavements (%)",
+    min_value=10,
+    max_value=80,
+    value=p_cool_surf,
+    step=10,
+    help="Reduces urban heat storage in Asok, Sukhumvit, and Rama IV blocks."
+)
+
+st.sidebar.divider()
+st.sidebar.header("🌦️ 3. Climate & Evaluation Setback")
+
 target_distance_m = st.sidebar.slider(
-    "Target Urban Street Setback Distance (m)",
+    "Target CBD Street / Building Distance from Park (m)",
     min_value=0,
     max_value=800,
-    value=150,
+    value=200,
     step=25
 )
 
@@ -432,15 +460,14 @@ wind_direction_deg = st.sidebar.slider(
     min_value=0,
     max_value=360,
     value=231,
-    step=5,
-    help="231° = Southwesterly monsoon airflow observed in Bangkok."
+    step=5
 )
 
 wind_speed_ms = st.sidebar.slider(
     "Ambient Wind Speed (m/s)",
     min_value=0.5,
     max_value=5.0,
-    value=preset_wind,
+    value=p_wind,
     step=0.1
 )
 
@@ -448,7 +475,7 @@ solar_rad_wm2 = st.sidebar.slider(
     "Peak Afternoon Solar Radiation (W/m²)",
     min_value=200,
     max_value=1000,
-    value=preset_solar,
+    value=p_solar,
     step=50
 )
 
@@ -458,35 +485,60 @@ cooling_threshold_c = st.sidebar.selectbox(
     index=0
 )
 
+st.sidebar.divider()
+st.sidebar.header("🗺️ 4. Map Layer Toggles")
+show_bma_boundary = st.sidebar.checkbox("Show Bangkok Boundary (BMA)", value=True)
+show_vegetation = st.sidebar.checkbox("Show Vegetation & Canopy Belts", value=True)
+show_corridors = st.sidebar.checkbox("Show Blue-Green Cooling Corridors", value=True)
+
 # ---------------------------------------------------------
-# 5. EMPIRICAL COOLING ENGINE
+# 5. ENHANCED EMPIRICAL + URBAN MITIGATION COOLING ENGINE
 # ---------------------------------------------------------
-def compute_site_metrics(base_area_ha, scale_pct, solar_wm2, wind_ms, threshold_c, setback_m, corridor_active=False):
+def compute_mitigated_metrics(
+    base_area_ha, scale_pct, solar_wm2, wind_ms, threshold_c, setback_m,
+    canopy_pct=15, openness_pct=40, albedo_pct=10, edge_opt=False, corridor_active=False
+):
     sim_area_ha = base_area_ha * (scale_pct / 100.0)
     area_factor = (sim_area_ha / 88.84) ** 0.35
     solar_adj = 0.0026 * (solar_wm2 - 650.0)
     wind_adj = -0.1884 * (wind_ms - 1.92)
-    corridor_dt_bonus = 0.25 if corridor_active else 0.0
 
-    core_dt = max(0.2, (2.097 * area_factor) + solar_adj + wind_adj + corridor_dt_bonus)
-    k = 0.00490 / (area_factor * (1.12 if corridor_active else 1.0))
+    edge_boost = 0.35 if edge_opt else 0.0
+    corridor_boost = 0.20 if corridor_active else 0.0
+    canopy_lift = 0.015 * max(0, canopy_pct - 15)
+    albedo_lift = 0.005 * max(0, albedo_pct - 10)
+    local_cbd_lift = canopy_lift + albedo_lift
+
+    openness_factor = 1.0 + 0.006 * max(0, openness_pct - 40)
+    k = 0.00490 / (area_factor * openness_factor)
+    core_plume_dt = max(0.2, (2.097 * area_factor) + solar_adj + wind_adj + edge_boost + corridor_boost)
 
     def pred(d, downwind=False):
-        bonus = 0.15 if downwind else 0.0
-        val = (core_dt + bonus) * math.exp(-k * d) - 0.050
-        return max(0.0, round(val, 2))
+        dw_mult = 1.18 if downwind else 1.0
+        eff_d = d / dw_mult
+        plume_dt = core_plume_dt * math.exp(-k * eff_d) - 0.050
+        neighborhood_dt = local_cbd_lift * math.exp(-0.0012 * d)
+        return max(0.0, round(plume_dt + neighborhood_dt, 2))
 
-    if core_dt > (threshold_c + 0.050):
-        mcd = round(-math.log((threshold_c + 0.050) / core_dt) / k, 1)
-    else:
-        mcd = 0.0
+    mcd_cross = 0.0
+    for step_d in range(0, 1501):
+        if pred(step_d, False) >= threshold_c:
+            mcd_cross = float(step_d)
+        else:
+            break
 
-    mcd_down = round(mcd * (1.25 if corridor_active else 1.18), 1)
+    mcd_down = 0.0
+    for step_d in range(0, 1801):
+        if pred(step_d, True) >= threshold_c:
+            mcd_down = float(step_d)
+        else:
+            break
+
     return {
         "sim_area_ha": round(sim_area_ha, 1),
-        "core_dt": round(core_dt, 2),
-        "decay_k": k,
-        "mcd_cross": mcd,
+        "core_dt": round(core_plume_dt + local_cbd_lift, 2),
+        "local_cbd_lift": round(local_cbd_lift, 2),
+        "mcd_cross": mcd_cross,
         "mcd_down": mcd_down,
         "dt_setback_cross": pred(setback_m, False),
         "dt_setback_down": pred(setback_m, True),
@@ -498,26 +550,35 @@ to_wgs = Transformer.from_crs("EPSG:32647", "EPSG:4326", always_xy=True)
 poly_features = [feat for feat in wetland_geojson["features"] if feat["geometry"]["type"] in ["Polygon", "MultiPolygon"]]
 benjakitti_poly_wgs = shape(poly_features[0]["geometry"])
 bma_poly_wgs = Polygon(BANGKOK_BMA_BOUNDARY_COORDS)
-bma_poly_utm = transform(to_utm.transform, bma_poly_wgs)
 
-# Helper to add common Bangkok Boundary, Vegetation, and Corridor layers to any Folium map
 def add_bangkok_planning_layers(fmap):
-    # 1. Bangkok Administrative Boundary
     if show_bma_boundary:
-        folium.GeoJson(
-            mapping(bma_poly_wgs),
-            name="Bangkok Administrative Boundary (BMA)",
-            style_function=lambda x: {
-                "fillColor": "#f7fbff",
-                "color": "#d95f02",
-                "weight": 3.0,
-                "dashArray": "8, 5",
-                "fillOpacity": 0.04,
-            },
-            tooltip="Bangkok Metropolitan Administration (BMA) Boundary (~1,569 km²)"
-        ).add_to(fmap)
+        if bma_districts_geojson is not None:
+            folium.GeoJson(
+                bma_districts_geojson,
+                name="Bangkok BMA 50 Districts (OSM)",
+                style_function=lambda x: {
+                    "fillColor": "#f7fbff",
+                    "color": "#d95f02",
+                    "weight": 1.8,
+                    "dashArray": "5, 4",
+                    "fillOpacity": 0.03,
+                }
+            ).add_to(fmap)
+        else:
+            folium.GeoJson(
+                mapping(bma_poly_wgs),
+                name="Bangkok Administrative Boundary (BMA)",
+                style_function=lambda x: {
+                    "fillColor": "#f7fbff",
+                    "color": "#d95f02",
+                    "weight": 3.0,
+                    "dashArray": "8, 5",
+                    "fillOpacity": 0.04,
+                },
+                tooltip="Bangkok Metropolitan Administration (BMA) Boundary (~1,569 km²)"
+            ).add_to(fmap)
 
-    # 2. Vegetation & Urban Canopy Zones
     if show_vegetation:
         for vz in VEGETATION_ZONES:
             if "Future" in vz["type"] and not include_future_nodes:
@@ -526,18 +587,16 @@ def add_bangkok_planning_layers(fmap):
             v_poly = Polygon(vz["coords"])
             folium.GeoJson(
                 mapping(v_poly),
-                name=f"Vegetation: {vz['name']}",
                 style_function=lambda x, fut=is_future: {
                     "fillColor": "#78c679" if not fut else "#addd8e",
                     "color": "#238443",
                     "weight": 1.2,
                     "dashArray": "4, 4" if fut else None,
-                    "fillOpacity": 0.25 if not fut else 0.20,
+                    "fillOpacity": 0.24 if not fut else 0.20,
                 },
                 tooltip=f"{vz['name']} ({vz['type']} | Canopy: {vz['canopy_pct']}%)"
             ).add_to(fmap)
 
-    # 3. Cooling & Ventilation Corridors
     if show_corridors:
         for corr in COOLING_CORRIDORS:
             if "Future" in corr["status"] and not corridor_boost_on:
@@ -555,16 +614,190 @@ def add_bangkok_planning_layers(fmap):
                     "color": "#006064" if fut else "#045a8d",
                     "weight": 1.5,
                     "dashArray": "6, 4" if fut else None,
-                    "fillOpacity": 0.28,
+                    "fillOpacity": 0.26,
                 },
                 tooltip=f"{corr['name']} ({corr['status']} | Extra Cooling: -{corr['bonus_dt']:.2f}°C)"
             ).add_to(fmap)
 
 # =========================================================
-# VIEW A: BANGKOK-WIDE VISION (EXISTING VS FUTURE SCENARIO)
+# VIEW 1: BANGKOK CBD MITIGATION LAB (BENJAKITTI-ASOK-LUMPHINI)
 # =========================================================
-if sim_mode.startswith("Bangkok-Wide"):
-    # Compute Existing Baseline vs Current Selected Vision for direct comparison
+if sim_mode.startswith("Bangkok CBD"):
+    base_res = compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 40, 10, False, False)
+    mit_res = compute_mitigated_metrics(
+        88.84, wetland_scale_pct, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m,
+        canopy_pct=cbd_canopy_pct, openness_pct=canyon_openness_pct, albedo_pct=cool_surface_pct,
+        edge_opt=wetland_edge_opt, corridor_active=corridor_boost_on
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Mitigated Core Cooling (ΔT)", f"-{mit_res['core_dt']:.2f} °C", f"-{mit_res['core_dt'] - base_res['core_dt']:.2f} °C Gain vs. Baseline")
+    with col2:
+        st.metric(f"CBD Cooling Reach (≥{cooling_threshold_c}°C)", f"{mit_res['mcd_cross']:.0f} m", f"+{mit_res['mcd_cross'] - base_res['mcd_cross']:.0f} m Extended Reach")
+    with col3:
+        st.metric("Downwind Corridor Reach", f"{mit_res['mcd_down']:.0f} m", f"+{mit_res['mcd_down'] - base_res['mcd_down']:.0f} m Along {wind_direction_deg}° Wind")
+    with col4:
+        st.metric(f"Cooling at {target_distance_m}m CBD Block", f"-{mit_res['dt_setback_down']:.2f} °C", f"-{mit_res['dt_setback_down'] - base_res['dt_setback_down']:.2f} °C Extra Relief")
+
+    st.divider()
+    map_col, chart_col = st.columns([1.3, 1.0])
+
+    with map_col:
+        st.subheader("🗺️ Central Bangkok CBD Cooling Expansion Map (Benjakitti – Asok – Lumphini)")
+        poly_utm = transform(to_utm.transform, benjakitti_poly_wgs)
+        if wetland_scale_pct != 100:
+            s_lin = math.sqrt(wetland_scale_pct / 100.0)
+            poly_utm_sim = scale(poly_utm, xfact=s_lin, yfact=s_lin, origin="center")
+        else:
+            poly_utm_sim = poly_utm
+
+        downwind_rad = math.radians((wind_direction_deg + 180) % 360)
+
+        base_outer = poly_utm.buffer(base_res["mcd_cross"])
+        base_shift = (base_res["mcd_down"] - base_res["mcd_cross"]) * 0.8
+        base_plume = translate(base_outer, xoff=base_shift * math.sin(downwind_rad), yoff=base_shift * math.cos(downwind_rad))
+
+        mit_outer = poly_utm_sim.buffer(mit_res["mcd_cross"])
+        mit_shift = (mit_res["mcd_down"] - mit_res["mcd_cross"]) * 0.8
+        mit_plume = translate(mit_outer, xoff=mit_shift * math.sin(downwind_rad), yoff=mit_shift * math.cos(downwind_rad))
+
+        m_cbd = folium.Map(location=[13.7335, 100.5535], zoom_start=14, tiles="OpenStreetMap", name="Bangkok Street Map")
+        folium.TileLayer(
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Esri World Imagery",
+            name="Satellite Aerial View",
+            overlay=False,
+            control=True
+        ).add_to(m_cbd)
+
+        add_bangkok_planning_layers(m_cbd)
+
+        folium.GeoJson(
+            mapping(transform(to_wgs.transform, mit_plume)),
+            name=f"Mitigated Future Cooling Zone (~{mit_res['mcd_cross']:.0f}m–{mit_res['mcd_down']:.0f}m)",
+            style_function=lambda x: {"fillColor": "#02818a", "color": "#014636", "weight": 2.0, "fillOpacity": 0.24},
+        ).add_to(m_cbd)
+
+        folium.GeoJson(
+            mapping(transform(to_wgs.transform, base_plume)),
+            name=f"Existing Baseline Cooling Limit (~{base_res['mcd_cross']:.0f}m)",
+            style_function=lambda x: {"fillColor": "none", "color": "#e31a1c", "weight": 2.2, "dashArray": "6, 4"},
+        ).add_to(m_cbd)
+
+        folium.GeoJson(
+            mapping(transform(to_wgs.transform, poly_utm_sim)),
+            name="Benjakitti Wetland Core",
+            style_function=lambda x: {"fillColor": "#006d2c", "color": "#00441b", "weight": 2.5, "fillOpacity": 0.65},
+        ).add_to(m_cbd)
+
+        for site in BANGKOK_WETLAND_SITES[1:3]:
+            sp_utm = transform(to_utm.transform, Polygon(site["coords_wgs84"]))
+            sp_res = compute_mitigated_metrics(
+                site["area_ha"], wetland_scale_pct, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m,
+                canopy_pct=cbd_canopy_pct, openness_pct=canyon_openness_pct, albedo_pct=cool_surface_pct,
+                edge_opt=wetland_edge_opt, corridor_active=corridor_boost_on
+            )
+            sp_plume = translate(
+                sp_utm.buffer(sp_res["mcd_cross"]),
+                xoff=(sp_res["mcd_down"] - sp_res["mcd_cross"]) * 0.8 * math.sin(downwind_rad),
+                yoff=(sp_res["mcd_down"] - sp_res["mcd_cross"]) * 0.8 * math.cos(downwind_rad)
+            )
+            folium.GeoJson(
+                mapping(transform(to_wgs.transform, sp_plume)),
+                style_function=lambda x: {"fillColor": "#3690c0", "color": "#034e7b", "weight": 1.2, "fillOpacity": 0.20},
+            ).add_to(m_cbd)
+            folium.GeoJson(
+                mapping(transform(to_wgs.transform, sp_utm)),
+                style_function=lambda x: {"fillColor": "#238b45", "color": "#00441b", "weight": 2.0, "fillOpacity": 0.65},
+                tooltip=f"{site['name']} (Mitigated Core ΔT: -{sp_res['core_dt']:.2f}°C | Reach: {sp_res['mcd_down']:.0f}m)"
+            ).add_to(m_cbd)
+
+        folium.LayerControl(collapsed=True).add_to(m_cbd)
+        st_folium(m_cbd, width=None, height=500, returned_objects=[])
+
+    with chart_col:
+        st.subheader("📈 Baseline vs. Mitigated CBD Cooling Curve")
+        distances = np.linspace(0, 800, 160)
+        curve_df = pd.DataFrame({
+            "Distance from Wetland (m)": distances,
+            "1. Existing Baseline (Downwind ΔT °C)": [base_res["predict_fn"](d, True) for d in distances],
+            "2. Mitigated Future CBD (Downwind ΔT °C)": [mit_res["predict_fn"](d, True) for d in distances],
+        }).set_index("Distance from Wetland (m)")
+        st.line_chart(curve_df, height=300)
+
+        msg = (
+            f"**CBD Mitigation Gain Summary (at {target_distance_m}m into Asok / Sukhumvit / Rama IV):**\n\n"
+            f"- **Without Mitigation (Baseline):** Peak cooling is **-{base_res['dt_setback_down']:.2f} °C** (reaches {base_res['mcd_down']:.0f} m).\n"
+            f"- **With Selected CBD Mitigation:** Peak cooling increases to **-{mit_res['dt_setback_down']:.2f} °C** (**+{mit_res['dt_setback_down'] - base_res['dt_setback_down']:.2f} °C** extra cooling) and penetrates **{mit_res['mcd_down']:.0f} m** into dense CBD blocks."
+        )
+        st.success(msg)
+
+    st.subheader("🔬 Factor-by-Factor Mitigation Contribution Breakdown (Thesis Planning Matrix)")
+    factor_rows = [
+        {
+            "Mitigation Factor / Urban Design Intervention": "0. Baseline Observed (Current Benjakitti + Unmitigated CBD)",
+            "Target Planning Parameter": "88.8 ha wetland, 15% CBD canopy, 40% porosity, 10% cool surfaces",
+            "Peak Core ΔT (°C)": -base_res["core_dt"],
+            "Downwind Reach ≥0.5°C (m)": base_res["mcd_down"],
+            f"Cooling at {target_distance_m}m CBD Block (°C)": -base_res["dt_setback_down"],
+            "Net Gain vs. Baseline (°C)": 0.00
+        },
+        {
+            "Mitigation Factor / Urban Design Intervention": "+ Factor A: Wetland Riparian Canopy & Edge Optimization",
+            "Target Planning Parameter": "Multi-tier shade trees + shallow littoral water edge (+0.35°C)",
+            "Peak Core ΔT (°C)": -compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 40, 10, True, False)["core_dt"],
+            "Downwind Reach ≥0.5°C (m)": compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 40, 10, True, False)["mcd_down"],
+            f"Cooling at {target_distance_m}m CBD Block (°C)": -compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 40, 10, True, False)["dt_setback_down"],
+            "Net Gain vs. Baseline (°C)": round(compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 40, 10, True, False)["dt_setback_down"] - base_res["dt_setback_down"], 2)
+        },
+        {
+            "Mitigation Factor / Urban Design Intervention": "+ Factor B: CBD Street Tree Canopy & Green Roofs (45%)",
+            "Target Planning Parameter": "Increase CBD green canopy from 15% to 45% in 0–400m buffer",
+            "Peak Core ΔT (°C)": -compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 45, 40, 10, False, False)["core_dt"],
+            "Downwind Reach ≥0.5°C (m)": compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 45, 40, 10, False, False)["mcd_down"],
+            f"Cooling at {target_distance_m}m CBD Block (°C)": -compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 45, 40, 10, False, False)["dt_setback_down"],
+            "Net Gain vs. Baseline (°C)": round(compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 45, 40, 10, False, False)["dt_setback_down"] - base_res["dt_setback_down"], 2)
+        },
+        {
+            "Mitigation Factor / Urban Design Intervention": "+ Factor C: Ventilation Corridor & Step-Down Massing (80% Porosity)",
+            "Target Planning Parameter": "Align street canyons & height setbacks with 231° SW monsoon",
+            "Peak Core ΔT (°C)": -compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 80, 10, False, True)["core_dt"],
+            "Downwind Reach ≥0.5°C (m)": compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 80, 10, False, True)["mcd_down"],
+            f"Cooling at {target_distance_m}m CBD Block (°C)": -compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 80, 10, False, True)["dt_setback_down"],
+            "Net Gain vs. Baseline (°C)": round(compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 80, 10, False, True)["dt_setback_down"] - base_res["dt_setback_down"], 2)
+        },
+        {
+            "Mitigation Factor / Urban Design Intervention": "+ Factor D: High-Albedo Cool Roofs & Pavements (70%)",
+            "Target Planning Parameter": "Reflective roof coatings & permeable cool asphalt in CBD",
+            "Peak Core ΔT (°C)": -compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 40, 70, False, False)["core_dt"],
+            "Downwind Reach ≥0.5°C (m)": compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 40, 70, False, False)["mcd_down"],
+            f"Cooling at {target_distance_m}m CBD Block (°C)": -compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 40, 70, False, False)["dt_setback_down"],
+            "Net Gain vs. Baseline (°C)": round(compute_mitigated_metrics(88.84, 100, solar_rad_wm2, wind_speed_ms, cooling_threshold_c, target_distance_m, 15, 40, 70, False, False)["dt_setback_down"] - base_res["dt_setback_down"], 2)
+        },
+        {
+            "Mitigation Factor / Urban Design Intervention": "★ COMBINED FULL CBD MITIGATION (All Factors Active)",
+            "Target Planning Parameter": "Integrated Wetland + 45% Canopy + Wind Corridor + 70% Cool Surfaces",
+            "Peak Core ΔT (°C)": -mit_res["core_dt"],
+            "Downwind Reach ≥0.5°C (m)": mit_res["mcd_down"],
+            f"Cooling at {target_distance_m}m CBD Block (°C)": -mit_res["dt_setback_down"],
+            "Net Gain vs. Baseline (°C)": round(mit_res["dt_setback_down"] - base_res["dt_setback_down"], 2)
+        }
+    ]
+    factor_df = pd.DataFrame(factor_rows)
+    st.dataframe(factor_df, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        label="⬇️ Download CBD Mitigation Factor Table (CSV)",
+        data=factor_df.to_csv(index=False).encode("utf-8"),
+        file_name="bangkok_cbd_mitigation_performance.csv",
+        mime="text/csv"
+    )
+
+# =========================================================
+# VIEW 2: BANGKOK-WIDE VISION (EXISTING VS FUTURE SCENARIO)
+# =========================================================
+elif sim_mode.startswith("Bangkok-Wide"):
     active_sites = [
         s for s in BANGKOK_WETLAND_SITES
         if s["status"] != "Future Vision" or include_future_nodes
@@ -587,9 +820,11 @@ if sim_mode.startswith("Bangkok-Wide"):
     add_bangkok_planning_layers(m_city)
 
     for site in active_sites:
-        s_res = compute_site_metrics(
+        s_res = compute_mitigated_metrics(
             site["area_ha"], wetland_scale_pct, solar_rad_wm2, wind_speed_ms,
-            cooling_threshold_c, target_distance_m, corridor_active=corridor_boost_on
+            cooling_threshold_c, target_distance_m,
+            canopy_pct=cbd_canopy_pct, openness_pct=canyon_openness_pct, albedo_pct=cool_surface_pct,
+            edge_opt=wetland_edge_opt, corridor_active=corridor_boost_on
         )
         city_rows.append({
             "Wetland / Retention Node": site["name"],
@@ -639,7 +874,6 @@ if sim_mode.startswith("Bangkok-Wide"):
             )
         ).add_to(m_city)
 
-    # Include corridor buffers in total city cooled area when corridors are active
     all_cooled_geoms = list(plume_geoms_utm)
     if show_corridors:
         for corr in COOLING_CORRIDORS:
@@ -651,77 +885,24 @@ if sim_mode.startswith("Bangkok-Wide"):
     merged_core_ha = unary_union(core_geoms_utm).area / 10000.0
     merged_cooled_ha = max(0.0, (unary_union(all_cooled_geoms).area / 10000.0) - merged_core_ha)
 
-    # Calculate Vegetation Area inside BMA
     active_veg = [v for v in VEGETATION_ZONES if "Future" not in v["type"] or include_future_nodes]
     veg_geoms_utm = [transform(to_utm.transform, Polygon(v["coords"])) for v in active_veg]
     merged_veg_ha = unary_union(veg_geoms_utm).area / 10000.0
 
-    # Baseline reference values for delta display (Existing 2026: 798.4 ha wetland, ~1,185 ha cooled urban zone)
-    baseline_wetland_ha = 798.4
-    baseline_cooled_ha = 1185.0
-
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric(
-            "Total Wetland Core Area",
-            f"{merged_core_ha:.1f} ha",
-            f"{merged_core_ha - baseline_wetland_ha:+.1f} ha vs. Existing 2026"
-        )
+        st.metric("Total Wetland Core Area", f"{merged_core_ha:.1f} ha", f"{merged_core_ha - 798.4:+.1f} ha vs. Existing")
     with col2:
-        st.metric(
-            "Urban Vegetation & Canopy Zones",
-            f"{merged_veg_ha:,.0f} ha",
-            f"{len(active_veg)} Green Belts Mapped"
-        )
+        st.metric("Urban Vegetation & Canopy Zones", f"{merged_veg_ha:,.0f} ha", f"{len(active_veg)} Green Belts Mapped")
     with col3:
-        st.metric(
-            "Net Cooled Urban Zone (≥0.5°C)",
-            f"{merged_cooled_ha:,.1f} ha",
-            f"{merged_cooled_ha - baseline_cooled_ha:+.1f} ha vs. Existing 2026"
-        )
+        st.metric("Net Cooled Urban Zone (≥0.5°C)", f"{merged_cooled_ha:,.1f} ha", f"{merged_cooled_ha - 1185.0:+.1f} ha vs. Existing")
     with col4:
         avg_core_dt = np.mean([r["Peak Core ΔT (°C)"] for r in city_rows])
-        st.metric(
-            "Network Mean Core Cooling",
-            f"{avg_core_dt:.2f} °C",
-            f"{'Future Corridors Active' if corridor_boost_on else 'Existing Baseline'}"
-        )
+        st.metric("Network Mean Core Cooling", f"{avg_core_dt:.2f} °C", "Mitigation Active" if corridor_boost_on else "Baseline")
 
     st.divider()
-
-    # Map Legend Banner
-    st.markdown(
-        "**Map Legend:** &nbsp; "
-        "🟧 **Dashed Orange:** Bangkok (BMA) Boundary &nbsp;|&nbsp; "
-        "🟩 **Dark Green:** Wetland Cores &nbsp;|&nbsp; "
-        "🌿 **Light Green:** Urban Vegetation & Canopy Belts &nbsp;|&nbsp; "
-        "🟦 **Cyan / Blue Channels:** Cooling & Wind Corridors + Plumes"
-    )
-
     folium.LayerControl(collapsed=True).add_to(m_city)
     st_folium(m_city, width=None, height=540, returned_objects=[])
-
-    # Existing vs. Future Vision Comparison Summary Box
-    st.subheader("📊 Existing Situation vs. Future Vision Comparison (Bangkok-Wide)")
-    comp_df = pd.DataFrame([
-        {
-            "Planning Stage": "Existing Situation (2026 Baseline)",
-            "Active Wetland Nodes": "7 Existing Parks & Basins (798.4 ha)",
-            "Vegetation & Canopy Strategy": "4 Existing Urban/Peri-Urban Canopy Belts",
-            "Cooling Corridors": "Chao Phraya River + Partial Benjakitti–Lumphini Link",
-            "Peak Core Cooling Range": "-1.63 °C to -3.30 °C",
-            "Net Cooled Surrounding Urban Area": "~1,185 ha"
-        },
-        {
-            "Planning Stage": "Future Vision 2035 (Blue-Green + Corridors)",
-            "Active Wetland Nodes": "9 Nodes (+30% Expansion + Khlong Toei & Lat Krabang Wetlands: 1,369 ha)",
-            "Vegetation & Canopy Strategy": "Central CBD Canopy Ring + Expanded Riparian Tree Belts",
-            "Cooling Corridors": "5 Integrated Blue-Green Wind Corridors (231° SW Monsoon Aligned)",
-            "Peak Core Cooling Range": "-2.07 °C to -3.90 °C",
-            "Net Cooled Surrounding Urban Area": "~3,450+ ha (+191% Urban Cooling Coverage)"
-        }
-    ])
-    st.table(comp_df)
 
     st.subheader("📋 Node-by-Node Bangkok Cooling Performance Table")
     city_df = pd.DataFrame(city_rows)
@@ -730,17 +911,19 @@ if sim_mode.startswith("Bangkok-Wide"):
     st.download_button(
         label="⬇️ Download Bangkok Scenario Results (CSV)",
         data=city_df.to_csv(index=False).encode("utf-8"),
-        file_name="bangkok_existing_vs_future_cooling_scenarios.csv",
+        file_name="bangkok_citywide_mitigation_scenarios.csv",
         mime="text/csv"
     )
 
 # =========================================================
-# VIEW B: BENJAKITTI EMPIRICAL SITE (22 SENSORS VALIDATION)
+# VIEW 3: BENJAKITTI EMPIRICAL SITE (22 SENSORS VALIDATION)
 # =========================================================
 else:
-    res = compute_site_metrics(
+    res = compute_mitigated_metrics(
         88.84, wetland_scale_pct, solar_rad_wm2, wind_speed_ms,
-        cooling_threshold_c, target_distance_m, corridor_active=corridor_boost_on
+        cooling_threshold_c, target_distance_m,
+        canopy_pct=cbd_canopy_pct, openness_pct=canyon_openness_pct, albedo_pct=cool_surface_pct,
+        edge_opt=wetland_edge_opt, corridor_active=corridor_boost_on
     )
 
     col1, col2, col3, col4 = st.columns(4)
@@ -757,7 +940,7 @@ else:
     map_col, chart_col = st.columns([1.35, 1.0])
 
     with map_col:
-        st.subheader("🗺️ Benjakitti Empirical Site, Vegetation & Corridors")
+        st.subheader("🗺️ Benjakitti Empirical Site & 22 Outdoor Loggers")
         poly_utm = transform(to_utm.transform, benjakitti_poly_wgs)
         if wetland_scale_pct != 100:
             scale_lin = math.sqrt(wetland_scale_pct / 100.0)
@@ -772,7 +955,7 @@ else:
         shift_m = (res["mcd_down"] - res["mcd_cross"]) * 0.8
         plume_utm = translate(outer_buf, xoff=shift_m * math.sin(downwind_rad), yoff=shift_m * math.cos(downwind_rad))
 
-        m = folium.Map(location=[13.7295, 100.5585], zoom_start=14, tiles="OpenStreetMap", name="Bangkok Street Map")
+        m = folium.Map(location=[13.7295, 100.5585], zoom_start=15, tiles="OpenStreetMap", name="Bangkok Street Map")
         folium.TileLayer(
             tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
             attr="Esri World Imagery",
@@ -843,12 +1026,13 @@ else:
         }).set_index("Distance from Wetland (m)")
         st.line_chart(chart_df, height=310)
 
-        st.info(
+        site_msg = (
             f"**Site Planning Insight (at {target_distance_m}m Setback):**\n\n"
             f"- **Crosswind / General Street:** Expected peak afternoon cooling is **{res['dt_setback_cross']:.2f} °C**.\n"
             f"- **Downwind Ventilation Corridor ({wind_direction_deg}°):** Expected peak cooling reaches **{res['dt_setback_down']:.2f} °C**.\n"
             f"- **Zoning Guideline:** Preserve open street canyons and low-rise step-downs within **{res['mcd_cross']:.0f} m – {res['mcd_down']:.0f} m** of the wetland boundary."
         )
+        st.info(site_msg)
 
     with st.expander("📊 View Field Sensor Summary Table (22 Validated Outdoor Loggers)"):
         st.dataframe(
